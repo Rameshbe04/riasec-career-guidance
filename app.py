@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import random
+import re
 from datetime import datetime, timezone
 
 st.set_page_config(page_title="RIASEC Career Guidance", page_icon="🎯", layout="centered")
@@ -137,10 +138,10 @@ if step == 0:
         with col1:
             name = st.text_input("Name *", value=st.session_state.personal_data.get("name", ""))
             reg_no = st.text_input("Registration Number *", value=st.session_state.personal_data.get("reg_no", ""))
-            gender = st.selectbox("Gender", ["Prefer not to say", "Female", "Male", "Other"], index=["Prefer not to say", "Female", "Male", "Other"].index(st.session_state.personal_data.get("gender", "Prefer not to say")))
-            email = st.text_input("Email ID", value=st.session_state.personal_data.get("email", ""))
+            gender = st.selectbox("Gender *", ["Male", "Female"], index=["Male", "Female"].index(st.session_state.personal_data.get("gender", "Male")) if st.session_state.personal_data.get("gender", "Male") in ["Male", "Female"] else 0)
+            email = st.text_input("Student Email ID *", value=st.session_state.personal_data.get("email", ""))
         with col2:
-            mobile = st.text_input("Mobile Number", value=st.session_state.personal_data.get("mobile", ""))
+            mobile = st.text_input("Mobile Number *", value=st.session_state.personal_data.get("mobile", ""), help="Enter a valid 10-digit mobile number; +91 is also accepted.")
             college = st.text_input("School / College *", value=st.session_state.personal_data.get("college", ""))
             department = st.text_input("Department *", value=st.session_state.personal_data.get("department", ""))
             section = st.text_input("Section", value=st.session_state.personal_data.get("section", ""))
@@ -151,6 +152,16 @@ if step == 0:
         missing = []
         if not name.strip(): missing.append("Name")
         if not reg_no.strip(): missing.append("Registration Number")
+        if not email.strip(): missing.append("Student Email ID")
+        elif not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email.strip()):
+            missing.append("a valid Student Email ID")
+        mobile_digits = re.sub(r"\D", "", mobile)
+        if not mobile.strip():
+            missing.append("Mobile Number")
+        elif len(mobile_digits) == 12 and mobile_digits.startswith("91"):
+            mobile_digits = mobile_digits[2:]
+        if mobile.strip() and len(mobile_digits) != 10:
+            missing.append("a valid 10-digit Mobile Number")
         if not college.strip(): missing.append("School / College")
         if not department.strip(): missing.append("Department")
         if year == "Select": missing.append("Year of Study")
