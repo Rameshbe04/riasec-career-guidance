@@ -108,44 +108,153 @@ def get_supabase_client():
         st.error(f"Could not initialize database connection: {exc}")
         return None
 
-with st.form("career_survey"):
-    st.header("Section 1: Personal Information")
-    st.caption("Please enter the details requested by your institution.")
-    col1, col2 = st.columns(2)
-    with col1:
-        name = st.text_input("Name *")
-        reg_no = st.text_input("Registration Number *")
-        gender = st.selectbox("Gender", ["Prefer not to say", "Female", "Male", "Other"])
-        email = st.text_input("Email ID")
-    with col2:
-        mobile = st.text_input("Mobile Number")
-        college = st.text_input("School / College *")
-        department = st.text_input("Department *")
-        section = st.text_input("Section")
-    year = st.selectbox("Year of Study *", ["Select", "1st Year", "2nd Year", "3rd Year", "4th Year", "5th Year", "Other"])
+# Use Streamlit multipage-style step navigation with session state.
+if "survey_step" not in st.session_state:
+    st.session_state.survey_step = 0
+if "personal_data" not in st.session_state:
+    st.session_state.personal_data = {}
+if "background_data" not in st.session_state:
+    st.session_state.background_data = {}
+if "riasec_data" not in st.session_state:
+    st.session_state.riasec_data = {}
 
-    st.divider()
-    st.header("Section 2: Student Background")
-    st.caption("Select the option that best describes you.")
-    background_answers = {}
-    for q, options in BACKGROUND_QUESTIONS.items():
-        background_answers[q] = st.radio(q, options, horizontal=True, key=f"bg_{q}")
+step = st.session_state.survey_step
 
-    st.divider()
-    st.header("Section 3: RIASEC Interest Questionnaire")
-    st.write("Answer **Yes** if the statement generally describes your interests, or **No** if it does not. Yes = 1 mark; No = 0 marks.")
-    st.info("The 42 questions are arranged in seven groups of six. Each group contains one question from each RIASEC category.")
-    riasec_answers = {}
-    for group_num in range(7):
-        st.subheader(f"Question group {group_num + 1} of 7")
-        for category, questions in RIASEC.items():
-            question = questions[group_num]
-            key = f"{category}_{group_num + 1}"
-            riasec_answers[key] = st.radio(question, ["Yes", "No"], horizontal=True, key=key, index=None)
-        if group_num < 6:
-            st.divider()
+if step == 0:
+    with st.form("personal_form"):
+        st.header("Section 1: Personal Information")
+        st.caption("Page 1 of 3 — Please enter the details requested by your institution.")
+        col1, col2 = st.columns(2)
+        with col1:
+            name = st.text_input("Name *", value=st.session_state.personal_data.get("name", ""))
+            reg_no = st.text_input("Registration Number *", value=st.session_state.personal_data.get("reg_no", ""))
+            gender = st.selectbox("Gender", ["Prefer not to say", "Female", "Male", "Other"], index=["Prefer not to say", "Female", "Male", "Other"].index(st.session_state.personal_data.get("gender", "Prefer not to say")))
+            email = st.text_input("Email ID", value=st.session_state.personal_data.get("email", ""))
+        with col2:
+            mobile = st.text_input("Mobile Number", value=st.session_state.personal_data.get("mobile", ""))
+            college = st.text_input("School / College *", value=st.session_state.personal_data.get("college", ""))
+            department = st.text_input("Department *", value=st.session_state.personal_data.get("department", ""))
+            section = st.text_input("Section", value=st.session_state.personal_data.get("section", ""))
+        years = ["Select", "1st Year", "2nd Year", "3rd Year", "4th Year", "5th Year", "Other"]
+        year = st.selectbox("Year of Study *", years, index=years.index(st.session_state.personal_data.get("year", "Select")))
+        next_personal = st.form_submit_button("Next →", type="primary")
+    if next_personal:
+        missing = []
+        if not name.strip(): missing.append("Name")
+        if not reg_no.strip(): missing.append("Registration Number")
+        if not college.strip(): missing.append("School / College")
+        if not department.strip(): missing.append("Department")
+        if year == "Select": missing.append("Year of Study")
+        if missing:
+            st.error("Please complete the required fields: " + ", ".join(missing) + ".")
+        else:
+            st.session_state.personal_data = {
+                "name": name, "reg_no": reg_no, "gender": gender, "email": email,
+                "mobile": mobile, "college": college, "department": department,
+                "section": section, "year": year
+            }
+            st.session_state.survey_step = 1
+            st.rerun()
 
-    submitted = st.form_submit_button("Submit and View Career Guidance", type="primary")
+elif step == 1:
+    with st.form("background_form"):
+        st.header("Section 2: Student Background")
+        st.caption("Page 2 of 3 — Select the option that best describes you.")
+        background_answers = {}
+        for q, options in BACKGROUND_QUESTIONS.items():
+            prior = st.session_state.background_data.get(q, options[0])
+            background_answers[q] = st.radio(q, options, horizontal=True, key=f"bg_{q}", index=options.index(prior))
+        prev_col, next_col = st.columns(2)
+        with prev_col:
+            previous_background = st.form_submit_button("← Previous")
+        with next_col:
+            next_background = st.form_submit_button("Next →", type="primary")
+    if previous_background:
+        st.session_state.background_data = background_answers
+        st.session_state.survey_step = 0
+        st.rerun()
+    if next_background:
+        st.session_state.background_data = background_answers
+        st.session_state.survey_step = 2
+        st.rerun()
+
+elif step == 2:
+    # Seven questionnaire pages, six questions per page. Keep the same section title on every page.
+    if "question_page" not in st.session_state:
+        st.session_state.question_page = 0
+    question_page = st.session_state.question_page
+    categories = list(RIASEC.keys())
+    questions_this_page = []
+    # Preserve mixed-category order: one question from each category per page.
+    for category in categories:
+        if question_page < len(RIASEC[category]):
+            questions_this_page.append((category, question_page + 1, RIASEC[category][question_page]))
+
+    with st.form(f"riasec_form_page_{question_page}"):
+        st.header("Section 3: RIASEC Interest Questionnaire")
+        st.caption(f"Page {question_page + 1} of 7 — Answer all six questions on this page.")
+        st.write("Answer **Yes** if the statement generally describes your interests, or **No** if it does not. Yes = 1 mark; No = 0 marks.")
+        page_answers = {}
+        for category, qnum, question in questions_this_page:
+            key = f"{category}_{qnum}"
+            previous_answer = st.session_state.riasec_data.get(key)
+            options = ["Yes", "No"]
+            page_answers[key] = st.radio(
+                question, options, horizontal=True, key=f"answer_{key}",
+                index=options.index(previous_answer) if previous_answer in options else None
+            )
+        prev_col, next_col = st.columns(2)
+        with prev_col:
+            previous_questions = st.form_submit_button("← Previous")
+        with next_col:
+            if question_page < 6:
+                next_questions = st.form_submit_button("Next →", type="primary")
+                submit_all = False
+            else:
+                next_questions = False
+                submit_all = st.form_submit_button("Submit and View Career Guidance", type="primary")
+
+    if previous_questions:
+        st.session_state.riasec_data.update(page_answers)
+        if question_page == 0:
+            st.session_state.survey_step = 1
+        else:
+            st.session_state.question_page = question_page - 1
+        st.rerun()
+
+    if next_questions:
+        missing_answers = [key for key, value in page_answers.items() if value is None]
+        if missing_answers:
+            st.error("Please answer all six questions on this page before continuing.")
+        else:
+            st.session_state.riasec_data.update(page_answers)
+            st.session_state.question_page = question_page + 1
+            st.rerun()
+
+    if submit_all:
+        missing_answers = [key for key, value in page_answers.items() if value is None]
+        if missing_answers:
+            st.error("Please answer all six questions on this page before submitting.")
+        else:
+            st.session_state.riasec_data.update(page_answers)
+            st.session_state.survey_submitted = True
+            st.rerun()
+
+# Process the completed questionnaire from session state so answers persist across pages.
+submitted = st.session_state.get("survey_submitted", False)
+if submitted:
+    personal = st.session_state.personal_data
+    name = personal["name"]
+    reg_no = personal["reg_no"]
+    gender = personal["gender"]
+    email = personal["email"]
+    mobile = personal["mobile"]
+    college = personal["college"]
+    department = personal["department"]
+    section = personal["section"]
+    year = personal["year"]
+    background_answers = st.session_state.background_data
+    riasec_answers = st.session_state.riasec_data
 
 if submitted:
     required_missing = []
