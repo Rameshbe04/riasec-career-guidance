@@ -109,6 +109,35 @@ def get_supabase_client():
         st.error(f"Could not initialize database connection: {exc}")
         return None
 
+
+def get_question_bank(client):
+    """Load editable questions and their versions from Supabase; use built-ins as a fallback."""
+    if client is not None:
+        try:
+            result = (client.table("survey_questions")
+                      .select("question_id, question_text, riasec_category, question_order, version")
+                      .eq("is_active", True)
+                      .order("question_order")
+                      .execute())
+            rows = result.data or []
+            if len(rows) == 42:
+                return [
+                    (row["riasec_category"], int(row["question_id"].split("_")[-1]),
+                     row["question_text"], int(row.get("version", 1)))
+                    for row in rows
+                ]
+        except Exception:
+            # This allows the survey to run before the schema has been applied.
+            pass
+    return [
+        (category, qnum, question, 1)
+        for category, statements in RIASEC.items()
+        for qnum, question in enumerate(statements, start=1)
+    ]
+
+
+ANSWER_SCORES = {"Agree": 2, "Neutral": 1, "Disagree": 0}
+
 # Use Streamlit multipage-style step navigation with session state.
 if "survey_step" not in st.session_state:
     st.session_state.survey_step = 0
@@ -119,12 +148,9 @@ if "background_data" not in st.session_state:
 if "riasec_data" not in st.session_state:
     st.session_state.riasec_data = {}
 if "shuffled_questions" not in st.session_state:
-    # Shuffle once per respondent/session; keep this order while they move between pages.
-    all_questions = [
-        (category, qnum, question)
-        for category, statements in RIASEC.items()
-        for qnum, question in enumerate(statements, start=1)
-    ]
+    # Load current question text/version from Supabase, then shuffle once per respondent.
+    question_client = get_supabase_client()
+    all_questions = get_question_bank(question_client)
     random.SystemRandom().shuffle(all_questions)
     st.session_state.shuffled_questions = all_questions
 
@@ -217,12 +243,12 @@ elif step == 2:
     with st.form(f"riasec_form_page_{question_page}"):
         st.header("Section 3: RIASEC Interest Questionnaire")
         st.caption(f"Page {question_page + 1} of 7 — Answer all six questions on this page. The question order is randomly shuffled for each respondent.")
-        st.write("Answer **Yes** if the statement generally describes your interests, or **No** if it does not. Yes = 1 mark; No = 0 marks.")
+        st.write("Choose the response that best reflects your interests: **Agree = 2**, **Neutral = 1**, **Disagree = 0**.")
         page_answers = {}
-        for category, qnum, question in questions_this_page:
-            key = f"{category}_{qnum}"
+        for category, qnum, question, question_version in questions_this_page:
+            key = f"{category[0]}_{qnum}"
             previous_answer = st.session_state.riasec_data.get(key)
-            options = ["Yes", "No"]
+            options = ["Agree", "Neutral", "Disagree"]
             page_answers[key] = st.radio(
                 question, options, horizontal=True, key=f"answer_{key}",
                 index=options.index(previous_answer) if previous_answer in options else None
@@ -296,8 +322,17 @@ if submitted:
             st.error(f"Please answer all 42 RIASEC questions. {len(unanswered)} question(s) remain unanswered.")
     else:
         scores = {
-            category: sum(1 for qnum in range(1, 8) if riasec_answers[f"{category}_{qnum}"] == "Yes")
+            category: sum(ANSWER_SCORES[riasec_answers[f"{category[0]}_{qnum}"]] for qnum in range(1, 8))
             for category in RIASEC
+        }
+        question_snapshots = {
+            f"{category[0]}_{qnum}": {
+                "question_id": f"{category[0]}_{qnum}",
+                "question_text": question,
+                "riasec_category": category,
+                "question_version": question_version,
+            }
+            for category, qnum, question, question_version in st.session_state.shuffled_questions
         }
         ranked = sorted(scores.items(), key=lambda x: (-x[1], list(RIASEC.keys()).index(x[0])))
         highest = ranked[0][1]
@@ -318,33 +353,61 @@ if submitted:
             "riasec_answers": riasec_answers,
             "riasec_scores": scores,
             "top_interest_categories": top_categories,
+            "survey_scale": "Agree=2, Neutral=1, Disagree=0",
+            "question_snapshots": question_snapshots,
         }
 
         client = get_supabase_client()
-        saved = False
-        if client is not None:
+        saved = bool(st.session_state.get("database_saved", False))
+        detailed_answers_saved = bool(st.session_state.get("detailed_answers_saved", False))
+        if client is not None and not saved:
             try:
-                client.table("riasec_responses").insert(row).execute()
+                insert_result = client.table("riasec_responses").insert(row).execute()
                 saved = True
-            except Exception:
-                st.error("Your results were calculated, but the response could not be saved to the database. Please contact the app administrator and try again later.")
-        else:
+                st.session_state.database_saved = True
+                inserted_rows = getattr(insert_result, "data", None) or []
+                response_id = inserted_rows[0].get("id") if inserted_rows else None
+                if response_id is not None:
+                    answer_rows = []
+                    for key, answer in riasec_answers.items():
+                        snapshot = question_snapshots.get(key, {})
+                        answer_rows.append({
+                            "response_id": response_id,
+                            "question_id": key,
+                            "question_version": snapshot.get("question_version", 1),
+                            "question_text_snapshot": snapshot.get("question_text", key),
+                            "riasec_category": snapshot.get("riasec_category", key.split("_")[0]),
+                            "answer": answer,
+                            "score": ANSWER_SCORES[answer],
+                        })
+                    client.table("survey_response_answers").insert(answer_rows).execute()
+                    detailed_answers_saved = True
+                    st.session_state.detailed_answers_saved = True
+            except Exception as exc:
+                if not saved:
+                    st.error("Your results were calculated, but the response could not be saved to the database. Please contact the app administrator and try again later.")
+                else:
+                    st.warning("Your full submission and all answers were saved in the main response record. The separate per-question detail table could not be updated; ask the administrator to check that the latest database schema has been applied.")
+        elif client is None:
             st.warning("Database connection is not configured yet. Your results are shown below, but this submission has not been saved centrally.")
 
         if saved:
-            st.success("Your response has been saved successfully.")
+            if detailed_answers_saved:
+                st.success("Your response and all 42 individual answers have been saved successfully.")
+            else:
+                st.success("Your full survey response has been saved in the database.")
 
         st.header("Your RIASEC Scores")
-        score_df = pd.DataFrame([{"Interest Category": cat, "Score (out of 7)": score} for cat, score in scores.items()])
+        score_df = pd.DataFrame([{"Interest Category": cat, "Score (out of 14)": score} for cat, score in scores.items()])
         st.bar_chart(score_df.set_index("Interest Category"))
         st.dataframe(score_df, hide_index=True, use_container_width=True)
 
         st.header("Your Career-Interest Suggestions")
         st.write("Your strongest interest area(s): **" + ", ".join(top_categories) + "**")
         for category, score in ranked:
-            if category in top_categories or score >= max(4, highest - 1):
+            if category in top_categories or score >= max(8, highest - 2):
                 description, suggestions = CAREER_GUIDANCE[category]
-                st.subheader(f"{category} — {score}/7")
+                st.subheader(f"{category} — {score}/14")
                 st.write(description)
                 st.write("**Areas to explore:** " + suggestions)
         st.info("These suggestions are a starting point for exploration, not a final career decision. Consider your skills, values, academic performance, opportunities, and advice from a career counsellor.")
@@ -367,4 +430,4 @@ if submitted:
         }]).to_csv(index=False).encode("utf-8-sig")
         st.download_button("Download My Result (CSV)", data=csv_data, file_name="riasec_career_result.csv", mime="text/csv")
 
-st.caption("Privacy note: Student responses may contain personal information. Collect only what is necessary, explain how responses will be used, and restrict database access to authorised staff.")
+st.caption("Privacy note: Student responses may contain personal information. Collect only what is necessary, explain how responses will be used, and restrict database access to authorised staff. Responses are stored in Supabase only when the server-side database connection is configured.")
