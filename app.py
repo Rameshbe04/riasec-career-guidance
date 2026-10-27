@@ -164,13 +164,15 @@ if step == 0:
         with col1:
             name = st.text_input("Name *", value=st.session_state.personal_data.get("name", ""))
             reg_no = st.text_input("Registration Number *", value=st.session_state.personal_data.get("reg_no", ""))
-            gender = st.selectbox("Gender *", ["Male", "Female"], index=["Male", "Female"].index(st.session_state.personal_data.get("gender", "Male")) if st.session_state.personal_data.get("gender", "Male") in ["Male", "Female"] else 0)
+            gender_options = ["Select an option", "Male", "Female", "Prefer not to say"]
+            saved_gender = st.session_state.personal_data.get("gender", "Select an option")
+            gender = st.selectbox("Gender *", gender_options, index=gender_options.index(saved_gender) if saved_gender in gender_options else 0)
             email = st.text_input("Student Email ID *", value=st.session_state.personal_data.get("email", ""))
         with col2:
             mobile = st.text_input("Mobile Number *", value=st.session_state.personal_data.get("mobile", ""), help="Enter a valid 10-digit mobile number; +91 is also accepted.")
             college = st.text_input("School / College *", value=st.session_state.personal_data.get("college", ""))
             department = st.text_input("Department *", value=st.session_state.personal_data.get("department", ""))
-            section = st.text_input("Section", value=st.session_state.personal_data.get("section", ""))
+            section = st.text_input("Section *", value=st.session_state.personal_data.get("section", ""))
         years = ["Select", "1st Year", "2nd Year", "3rd Year", "4th Year", "5th Year", "Other"]
         year = st.selectbox("Year of Study *", years, index=years.index(st.session_state.personal_data.get("year", "Select")))
         next_personal = st.form_submit_button("Next →", type="primary")
@@ -178,6 +180,7 @@ if step == 0:
         missing = []
         if not name.strip(): missing.append("Name")
         if not reg_no.strip(): missing.append("Registration Number")
+        if gender == "Select an option": missing.append("Gender")
         if not email.strip(): missing.append("Student Email ID")
         elif not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email.strip()):
             missing.append("a valid Student Email ID")
@@ -190,6 +193,7 @@ if step == 0:
             missing.append("a valid 10-digit Mobile Number")
         if not college.strip(): missing.append("School / College")
         if not department.strip(): missing.append("Department")
+        if not section.strip(): missing.append("Section")
         if year == "Select": missing.append("Year of Study")
         if missing:
             st.error("Please complete the required fields: " + ", ".join(missing) + ".")
@@ -208,13 +212,16 @@ elif step == 1:
         st.caption("Page 2 of 3 — Select the option that best describes you.")
         background_answers = {}
         for q, options in BACKGROUND_QUESTIONS.items():
-            prior = st.session_state.background_data.get(q, options[0])
-            background_answers[q] = st.radio(q, options, horizontal=True, key=f"bg_{q}", index=options.index(prior))
+            prior = st.session_state.background_data.get(q)
+            background_answers[q] = st.radio(
+                q + " *", options, horizontal=True, key=f"bg_{q}",
+                index=options.index(prior) if prior in options else None
+            )
         role_model_question = "Who inspires you in your career or entrepreneurial journey, and how have they influenced your goals or decisions?"
         background_answers[role_model_question] = st.text_area(
-            role_model_question + " (Optional)",
+            role_model_question + " *",
             value=st.session_state.background_data.get(role_model_question, ""),
-            placeholder="You may mention a family member, teacher, entrepreneur, or another person—and how they inspire you.",
+            placeholder="Please name the person and explain how they influence your goals or decisions.",
             key="bg_role_model_open_ended"
         )
         prev_col, next_col = st.columns(2)
@@ -227,9 +234,14 @@ elif step == 1:
         st.session_state.survey_step = 0
         st.rerun()
     if next_background:
-        st.session_state.background_data = background_answers
-        st.session_state.survey_step = 2
-        st.rerun()
+        missing_background = [q for q, answer in background_answers.items()
+                              if answer is None or (isinstance(answer, str) and not answer.strip())]
+        if missing_background:
+            st.error("Please complete every required background field before continuing: " + "; ".join(missing_background))
+        else:
+            st.session_state.background_data = background_answers
+            st.session_state.survey_step = 2
+            st.rerun()
 
 elif step == 2:
     # Seven questionnaire pages, six questions per page. Keep the same section title on every page.
@@ -310,14 +322,25 @@ if submitted:
     required_missing = []
     if not name.strip(): required_missing.append("Name")
     if not reg_no.strip(): required_missing.append("Registration Number")
+    if gender == "Select an option": required_missing.append("Gender")
     if not college.strip(): required_missing.append("School / College")
     if not department.strip(): required_missing.append("Department")
+    if not section.strip(): required_missing.append("Section")
+    if not email.strip() or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email.strip()): required_missing.append("Valid Student Email ID")
+    mobile_digits = re.sub(r"\D", "", mobile)
+    if len(mobile_digits) == 12 and mobile_digits.startswith("91"):
+        mobile_digits = mobile_digits[2:]
+    if len(mobile_digits) != 10: required_missing.append("Valid Mobile Number")
     if year == "Select": required_missing.append("Year of Study")
+    missing_background = [q for q, answer in background_answers.items()
+                          if answer is None or (isinstance(answer, str) and not answer.strip())]
     unanswered = [key for key, value in riasec_answers.items() if value is None]
 
-    if required_missing or unanswered:
+    if required_missing or missing_background or unanswered:
         if required_missing:
             st.error("Please complete the required fields: " + ", ".join(required_missing) + ".")
+        if missing_background:
+            st.error("Please complete all required background fields: " + "; ".join(missing_background))
         if unanswered:
             st.error(f"Please answer all 42 RIASEC questions. {len(unanswered)} question(s) remain unanswered.")
     else:
